@@ -8,7 +8,6 @@ Keep only remaining work here. Remove a line only after implementation **and
 verification**. Keep blocked lines with the missing evidence. Git preserves
 history. Task IDs are stable; do not renumber after removing an item.
 
-- [ ] BOOT — Verify documentation, public MIT repository publication, and the execution handoff. No application implementation is part of this bootstrap.
 - [ ] T00 — Verify account access and provider contracts using [ACCESS.adoc](docs/ACCESS.adoc). Regional eligibility is confirmed; API credentials, Gmail consent, payload shapes, current sequence membership, LinkedIn freshness, and Sales Navigator message coverage are still unverified. Owner-controlled setup is required for live checks; independent offline tasks can proceed.
 - [ ] T01 — Bootstrap the Python package, test/lint/build commands, lockfile, and minimal CLI help with test-first behavior.
 - [ ] T02 — Implement validated records, date precision, URL/email normalization, and coverage states with failing tests first.
