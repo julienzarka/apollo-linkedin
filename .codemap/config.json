@@ -1,0 +1,4 @@
+{
+  "exclude": [".git", ".venv", "private", "data", "exports", "reports", "build", "dist", "__pycache__", ".pytest_cache", ".ruff_cache", ".serena"],
+  "depth": 4
+}

@@ -1,0 +1,69 @@
+= Apollo LinkedIn
+:toc:
+
+An independent, local prospecting table combining an Apollo saved contact list,
+Apollo and Gmail email activity, and the owner's LinkedIn invitations,
+connections, and recent messages.
+
+*Status: researched and planned; the application is not implemented yet.*
+This public MIT repository is an execution package for a coding agent. It does
+not contain credentials, prospect records, or a working synchronization command.
+
+== Proposed workflow
+
+. Select a saved people list in Apollo.
+. Run an on-demand read of Apollo, the owner's Gmail account, and LinkedIn
+  Member Data Portability.
+. Open a locally generated HTML table or CSV containing company, person, role,
+  website, email, latest sent email, sequence membership, invitation/connection
+  evidence, and recent LinkedIn messages.
+. Review unresolved matches and partial-source warnings, then refresh when needed.
+
+The owner requires *both Apollo and direct Gmail emails*. The LinkedIn account
+is in the EU/EEA/Switzerland eligibility region. Actual API access and data
+coverage must still be verified. User-downloaded LinkedIn CSVs are the fallback.
+
+The design reads separate data sources through documented access paths. It
+requires no Apollo browser overlay or LinkedIn website scraper. A source refresh
+fetches the latest data the provider makes available; it cannot promise an
+immediate reflection of every website action. Provider accounts remain read-only.
+
+== Start here
+
+* link:AGENTS.adoc[Working method] — English adaptation of HumanVS, including TDD.
+* link:TASKS.md[Remaining work] — the live backlog; verified items are removed.
+* link:docs/RESEARCH.adoc[State of the art] — sources, alternatives, feasibility, Five Whys.
+* link:docs/SPEC.adoc[Product specification] — behavior and acceptance criteria.
+* link:docs/ACCESS.adoc[Access checklist] — account setup and capability evidence.
+* link:docs/ARCHITECTURE.adoc[Architecture] — modules, data, reconciliation, error handling.
+* link:docs/EXECUTION_PLAN.md[Execution plan] — ordered task cards with red/green tests.
+* link:docs/HANDOFF.adoc[Agent handoff] — execution prompt and reporting format.
+
+The selected implementation is a single Python package, SQLite, and local HTML/CSV
+outputs. No hosted service, frontend framework, scheduler, CRM write-back, or AI
+runtime is required. Google OAuth uses an established library.
+
+== Scope and limits
+
+LinkedIn Member Portability is separate from the restricted Sales Navigator
+partner API. Access, scope names, snapshot freshness, and Sales Navigator message
+coverage are explicit verification gates in the plan. Current sequence
+membership must be proven; a short enrollment timeline is insufficient.
+
+“Last email” means the latest known sent message across the configured Apollo
+sender and Gmail mailbox. Source and coverage remain visible. Missing or partial
+history must not be reported as “never contacted.”
+
+Only source code and synthetic examples may be published. Real exports, tokens,
+SQLite files, HTML tables, and CSVs stay in the Git-ignored `private/` directory.
+MIT licenses this project's code; it does not license provider data or grant API
+access. This project is not affiliated with Apollo, Google, Microsoft, or LinkedIn.
+
+== Contributing
+
+Read `AGENTS.adoc`, select a remaining task, and follow its test-first task card.
+Behavior changes require specification and test updates. Submit implementation
+through a feature branch and pull request. Report offline and live checks
+separately; never publish private fixtures or screenshots.
+
+License: link:LICENSE[MIT].

@@ -1,0 +1,298 @@
+= Implementation Design
+:toc:
+
+This is a proposed design, not a description of existing code. Behavior is
+defined in link:SPEC.adoc[the specification]. Provider-specific facts are in
+link:RESEARCH.adoc[Research] and must pass link:ACCESS.adoc[access verification].
+
+== Smallest useful system
+
+[source,text]
+----
+Apollo saved list + sequence/email reads ----+
+Gmail sent-message metadata ----------------+--> normalize --> reconcile
+LinkedIn portability / explicit CSV import -+                      |
+                                                                  v
+                                                        private SQLite store
+                                                                  |
+                                                                  v
+                                                   local HTML + CSV + summary
+----
+
+One process, serial bounded network requests, one SQLite database per account
+set. No server or browser automation is needed for normal operation. Choose
+Python 3.12+ and standard-library argparse, dataclasses, sqlite3, csv, zoneinfo,
+email, html, pathlib, and json. Use HTTPX for HTTP; use Google's established auth
+libraries for OAuth rather than implementing tokens and callbacks ourselves.
+
+Development tools: pytest, Ruff, and a package build tool. Lock dependencies
+with uv in the bootstrap task; choose available compatible versions there,
+not speculative version pins in this plan. Tests use real temporary SQLite
+databases and https://www.python-httpx.org/advanced/transports/[HTTPX MockTransport].
+https://docs.pytest.org/en/stable/how-to/tmp_path.html[pytest temporary paths]
+isolate tests; https://docs.astral.sh/ruff/[Ruff] supplies lint and formatting.
+
+SOLID here means focused adapters and functions that accept their dependencies,
+not a class hierarchy. Add a Protocol only if two real callers need substitution.
+One composition function wires config, clients, storage, and clock. No generic
+repository framework, ORM, task queue, or application-wide dependency container.
+
+== Proposed files
+
+[source,text]
+----
+pyproject.toml                 # package metadata and tool configuration
+uv.lock                       # dependency resolution
+src/apollo_linkedin/
+  __init__.py
+  __main__.py
+  cli.py                      # argparse and exit-code translation
+  config.py                   # private TOML, env secrets, validation
+  models.py                   # small records/enums, no provider dictionaries
+  normalize.py                # URLs, emails, dates, stable event identity
+  reconcile.py                # pure matching and projection functions
+  store.py                    # explicit SQL, transactions, schema version
+  http.py                     # bounded retries and safe request policy
+  sync.py                     # source orchestration and run coverage
+  render.py                   # CSV + escaped HTML, atomic outputs
+  adapters/
+    apollo.py
+    gmail.py
+    gmail_auth.py
+    linkedin.py               # snapshot; changelog only after its gate passes
+    csv_import.py             # verified exported formats
+tests/
+  unit/
+  integration/
+  acceptance/
+  fixtures/                   # invented identities, example.test domains
+private/                      # ignored input/config/db/output/evidence
+----
+
+Do not create empty abstractions in advance. Add each module with the task that
+introduces its first behavior. New fixture layouts must state which real schema
+was confirmed and which values/shapes remain synthetic assumptions.
+
+== Data records and storage
+
+Use ordinary dataclasses for Contact, SequenceMembership, LinkedInEvent,
+EmailObservation, SourceCoverage, and MatchDecision. Dates use an explicit
+value/precision/timezone-evidence representation; an ISO string alone is not
+enough to distinguish a date from an instant.
+
+[cols="1,2,2",options="header"]
+|===
+| Table | Keys and contents | Integrity rule
+| `schema_meta` | Schema version and non-secret account-set identifiers | Fail on newer unsupported schema; never reset automatically.
+| `contacts` | Apollo contact ID, names, company, title, website, known emails, public URL | Provider ID is primary identity. JSON arrays are sufficient for a few aliases.
+| `list_members` | List ID + contact ID | Replace membership only after a complete list refresh.
+| `sequence_memberships` | Contact ID + sequence ID, name, status, observed time | Complete memberships replace the prior set; partial reads do not erase it.
+| `linkedin_events` | Source event identity, kind, counterpart identifiers, direction, event time/precision, minimal message preview, observation time | Unique event key; retain evidence needed for projections. Provider update/delete semantics are explicit.
+| `email_observations` | Provider + account + message ID + recipient contact, sent time/kind, outcome | One provider message can legitimately target several contacts. Do not store bodies.
+| `identity_links` | Stable LinkedIn identity + Apollo contact ID, method, confirmation time | Ambiguity cannot become an automatic link; explicit duplicate-contact handling is visible.
+| `source_runs` | Run ID, source/domain, status, coverage bounds, data-as-of, fetched time, error class, counts | Failed/partial attempts do not overwrite last-success metadata.
+| `checkpoints` | Source/domain + last fully committed changelog cursor | Only needed when changelog is enabled; update in the same transaction as events.
+|===
+
+Keep SQLite operations parameterized and foreign keys enabled. Initially use a
+single writer; a second refresh gets a clear busy error, not interleaved commits.
+Store normalized relevant records rather than complete raw responses. Contact
+deletion cascades through local observations and mappings; source-rerun
+reimport is documented. Generated output is a replaceable projection, not a
+second editable database.
+
+`SourceCoverage` separates `fetch_status` (`complete`, `partial`, `failed`,
+`not_requested`) from `semantic_status` (`verified`, `partial`, `unsupported`,
+`unverified`). It also records coverage start/end when known, data-as-of when
+known, last successful fetch, and the latest attempt. Stale is a presentation
+property derived from an old successful observation or a failed newer attempt,
+not a replacement for either status. HTTP 200 alone establishes neither complete
+retrieval nor verified semantic coverage.
+
+== Matching and projection
+
+. Normalize a public LinkedIn URL with a URL parser: allow known LinkedIn hosts
+  and `/in/` profile paths, remove query/fragment and trailing slash, canonicalize
+  host/scheme. Do not collapse arbitrary paths or opaque IDs. Keep ambiguous
+  case/encoding variants unresolved unless verified or manually mapped.
+. Resolve explicit saved mapping, then unique URL, then unique exact known email.
+  Contradictory strong identifiers produce a conflict, regardless of precedence.
+. Keep unmatched/ambiguous events in a bounded review view using minimal metadata.
+  Do not attach message previews until the counterpart is identified.
+. Order valid events by actual event time and stable identity, never import order.
+  Derive invitation, connection, and direct-message projections per SPEC.
+. Compute per-source email maxima and combined latest-known time. Keep source
+  completeness separate from whether a maximum exists. Cross-provider duplicates
+  do not affect a maximum; do not build fuzzy email deduplication. If both expose
+  the same RFC Message-ID, retain that as supporting identity without deleting
+  source evidence or trusting it as globally unique across mailboxes.
+. Export primary contacts and recent network activity as separate local tables.
+
+Date-only evidence is not ordered against same-day instants without sufficient
+timezone information. Naive ambiguous timestamps are rejected into an issue
+count. If a required record is unparseable, keep that domain's previous state
+and report partial semantic coverage; other valid domains can still commit.
+Optional absent values remain null and do not invalidate a record. This avoids
+silently dropping bad rows and then replacing a previously complete domain.
+
+== Retrieval algorithms
+
+=== Apollo
+
+Load the selected contact list with complete page traversal. Read the sequence
+catalog once per run. Prefer verified current-membership fields in the contact
+response. Per-contact detail reads are justified only for absent required data;
+avoid unconditional N+1 lookups. Use the activity timeline for supporting events,
+never as proof of unlimited current memberships.
+
+Fetch outreach emails within the configured sender scope and paginate. Join
+verified response contact/recipient IDs locally. Do not invent unsupported
+query parameters. A search cap or configured request cap makes coverage partial;
+do not recurse into speculative partitioning on the first release. Tell the user
+to narrow the list or explicitly raise the budget after measuring usage.
+
+=== Gmail
+
+For each unique known contact address, list SENT messages with an exact quoted
+recipient query covering To/Cc/Bcc and traverse all page tokens. Construct queries
+from a validated mailbox value; no arbitrary Gmail query interpolation. Reject
+unsupported control/operator characters with a visible issue. Parse and recheck
+actual recipient headers after retrieving metadata. Verify From against the
+configured owner aliases. Use message IDs to avoid duplicate metadata reads.
+
+Use an explicit fields mask and metadata header allowlist; no Subject, body,
+snippet, or attachments are needed for the requested latest-date field. Full
+historical searches of the available SENT mailbox are the initial correctness
+baseline. Cache immutable message metadata, but enumerate search results each
+run so new messages are seen. Do not assume the first page is newest-first.
+Deleted messages may remain historical observations; label their last observed
+time and avoid claiming current mailbox presence. A future Gmail history cursor
+is an optimization only after scale measurements justify it.
+
+=== LinkedIn snapshots and changelog
+
+Request only the three needed domains. Validate response shapes before adapting.
+Use each domain's confirmed paging/termination rule, with repeated-page detection
+and a request budget. A no-data response before a domain is ready is not proof
+that the owner has no connections.
+
+A snapshot provides baseline state. Changelog is a separately gated addition
+for observed post-consent changes. When enabled, follow the verified traversal
+rule using an inclusive processed-time cursor and stable activity identity;
+allow a successful replay to replace an earlier failed parse. Equal-timestamp
+events and page boundaries must be covered by tests. Do not advance past an
+unretrieved page. A history gap beyond retention is recorded and a baseline is
+refetched; a current snapshot cannot recover every missing historical message.
+
+The precise cursor algorithm is not final until T00 validates actual response
+paging, ties, and event identity. Do not invent a `nextPageToken` for an API that
+does not expose one. If reliable traversal cannot be proven, keep snapshot mode
+and state its limitations.
+
+=== CSV
+
+Accept extracted files only. Match confirmed header sets, not fixed column
+positions. Support UTF-8 BOM and quoted multiline content through csv.DictReader.
+Skip only a specifically recognized preamble. Unknown schemas get actionable
+errors rather than fuzzy header guesses. Bound file/row sizes. Blank values
+are nulls; missing domain files are unavailable. Validate all rows and report
+counts before committing the source/domain transaction.
+
+== Failure and security boundaries
+
+HTTP helper: 10-second connect and 30-second read timeout, at most three attempts
+for transient failures on allowlisted read operations. Honor Retry-After; if
+the required delay exceeds the configured interactive wait budget, stop with a
+retry instruction instead of retrying early. Use a configurable per-source
+request budget, default 500 requests. Budgets are project safety bounds, not
+provider quota claims. Do not retry 400/401/403 or invalid schema responses.
+
+Base hosts are fixed per provider. Validate paging links against the expected
+HTTPS host/path before following; disable credential-carrying cross-host
+redirects. Never fetch URLs found in contact data or messages. Sanitize errors
+by category/status; do not dump HTTP bodies or request headers.
+
+Acquire the process/store lock; retrieve and validate one source/domain into
+memory or a bounded private staging area; commit a complete batch transaction;
+record partial/failed attempts separately. Independent successful sources can
+commit. Recompute projections from committed evidence. Write exports to temporary
+files in the destination directory and atomically replace them; a render failure
+keeps the previous output and reports failure. Prevent accidental overwrite of
+input CSVs or configuration through output-path validation.
+
+HTML uses plain escaped text and no external resources. Use a restrictive meta
+CSP allowing only local inline styles needed for the table, no scripts, frames,
+or network connections. Validate link schemes. CSV neutralizes leading formula
+characters, including after whitespace/control prefixes. Check the actual
+round-trip with a CSV reader and malicious example fixtures.
+
+== CLI contract (planned, not available yet)
+
+[source,text]
+----
+apollo-linkedin doctor --config private/config.toml
+apollo-linkedin auth gmail --client private/google-client.json
+apollo-linkedin lists --config private/config.toml
+apollo-linkedin sync --config private/config.toml --list-id LIST_ID
+apollo-linkedin import linkedin --directory private/linkedin-export --config private/config.toml
+apollo-linkedin import apollo --file private/apollo.csv --list-id LIST_ID --config private/config.toml
+apollo-linkedin export --config private/config.toml --list-id LIST_ID --output-dir private/output
+apollo-linkedin review --config private/config.toml
+apollo-linkedin link --contact-id CONTACT_ID --linkedin-identity ID --config private/config.toml
+apollo-linkedin forget --contact-id CONTACT_ID --config private/config.toml --yes
+apollo-linkedin reset --config private/config.toml --yes
+----
+
+`sync` normally requests all three providers; `--source` can explicitly select a
+subset, but output still identifies absent/stale coverage. `doctor` checks local
+config first and probes configured read access without printing secrets.
+`export` is offline. A confirmed mapping must reject unknown IDs and conflicts
+unless explicitly resolved through a documented review action.
+
+Configuration contains non-secret list/account identities, timezone, sender
+aliases, database/token paths, and request budget. Secrets come from environment
+or private OAuth token files. There is no .env auto-loader in the first release.
+Environment variables are read directly; do not embed tokens in sample commands.
+
+Proposed private configuration (all identifiers below are fictional):
+
+[source,toml]
+----
+schema_version = 1
+database = "private/state.sqlite3"
+output_dir = "private/output"
+display_timezone = "Europe/Paris"
+request_budget_per_source = 500
+
+[apollo]
+list_id = "synthetic-list"
+sender_user_ids = ["synthetic-owner"]
+
+[gmail]
+mailbox = "owner@example.test"
+sender_aliases = ["owner@example.test"]
+client_file = "private/google-client.json"
+token_file = "private/google-token.json"
+
+[linkedin]
+member_identity = "synthetic-member"
+mode = "snapshot"
+----
+
+Resolve relative configuration paths against the current invocation directory;
+document that commands are run from the repository root, or use absolute paths
+elsewhere. Validate containment of the default private paths. Do not treat these
+example keys as proof of provider
+response field names. T00 supplies actual source identifiers and mappings.
+
+== Validation and reversibility
+
+Use real temporary SQLite files for transactions and repeat-import tests; mock
+only provider transport, clocks, and waits. One offline end-to-end case joins all
+three providers and exports both tables. Firefox manual/headless inspection
+checks readability and escaping on synthetic output; no personal profiles.
+
+Every adapter is removable without changing the pure reconciliation rules.
+If portability fails, retain the same records and use explicit CSV import.
+If Gmail is unavailable, continue offline work but keep the required Gmail task
+blocked. Do not present an Apollo-only release as satisfying the agreed scope.

@@ -1,0 +1,44 @@
+# All real provider data and generated prospecting outputs belong here.
+/private/
+/data/
+/exports/
+/reports/
+/credentials/
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.log
+*.csv
+!tests/fixtures/**/*.csv
+*.zip
+*.pem
+*token*.json
+*credentials*.json
+client_secret*.json
+
+# Python and local tools
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+.serena/
+.DS_Store
+.idea/
+.vscode/
+/.codemap/cache/
+
+# Rendered documentation is a local verification artifact.
+/docs/*.html
+/README.html
+/AGENTS.html

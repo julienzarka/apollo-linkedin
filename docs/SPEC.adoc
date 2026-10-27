@@ -1,0 +1,265 @@
+= Product Specification
+:toc:
+
+Status: implementation contract, 2026-10-27. Account-specific field mappings
+are provisional until the access probes pass. This document is the single
+source of truth for behavior; link:RESEARCH.adoc[research] holds provider facts.
+
+== Problem and decisions
+
+The owner needs one prospecting table to choose whom to contact next without
+manually comparing Apollo, Gmail, and LinkedIn. Input is an existing Apollo
+saved people list. The owner confirmed both direct Gmail and Apollo email
+coverage, plus LinkedIn regional eligibility. No account consent or live data
+probe has yet occurred.
+
+Decisions: one local user, one Apollo workspace, one Gmail mailbox with explicit
+sender aliases, one LinkedIn member account, and one selected list per refresh.
+Each account combination gets its own private database. Updates are on demand.
+The local table is the synchronization target; provider write-back is deferred.
+Full historical Gmail searches are the correctness-first baseline. Additional
+mailboxes and scheduled refresh are separate future requirements.
+
+== User stories
+
+* As the owner, I select an Apollo list and see every saved contact in that list,
+  including contacts whose email or company is unknown.
+* As the owner, I see my latest known sent email across Apollo and Gmail, plus
+  every verified current sequence enrollment and its status.
+* As the owner, I see my recent outgoing LinkedIn invitations, new connections,
+  and recent messages, with dates and the strength of the evidence.
+* As the owner, I can refresh or import an archive, understand partial results,
+  and resolve a doubtful person match without corrupting another person's row.
+* As the owner, I can rerun the same operation without duplicate rows or dates
+  becoming newer merely because I imported them again.
+
+== Output contract
+
+Primary table: one row per Apollo contact ID in the selected list. Duplicate
+Apollo contacts remain separate rows and are flagged for review; do not silently
+merge them. A separate activity table shows recent LinkedIn records that do not
+match the selected list so the requested network overview is not lost.
+
+[cols="1,2,2",options="header"]
+|===
+| Columns | Meaning | Missing or ambiguous data
+| `apollo_contact_id`, `list_id`
+| Stable source IDs; not display-name keys.
+| Reject a contact row without a stable ID; keep a counted validation issue.
+| `company_name`, `person_name`, `job_title`, `company_website`, `email`
+| Apollo values. The website is the company website. Store known email aliases separately.
+| Blank value plus reason; never synthesize an email or silently enrich it.
+| `linkedin_profile_url`, `match_status`, `match_method`
+| Verified cross-source identity, or an unresolved review state.
+| Ambiguous records stay unattached; name-only joins are prohibited.
+| `last_apollo_email_at`, `last_gmail_email_at`, `last_email_sent_at`
+| Per-source latest known sent timestamps; combined maximum of comparable known instants.
+| Show source coverage; combined value is “latest known” while either source is partial.
+| `last_email_source`, `email_time_kind`, `email_coverage`
+| Source of the selected maximum, timestamp semantics, completeness of both reads.
+| Never label delivered/opened/scheduled timestamps as exact send time.
+| `sequences`, `sequence_coverage`
+| Stable-ID-sorted JSON array of `{id,name,status}` for verified current enrollments, including active, paused, or finished when still enrolled.
+| Removed enrollments excluded. Unknown membership is distinct from an empty complete list.
+| `last_invitation_sent_at`, `invitation_status`
+| Latest outgoing invitation to the matched person, with source evidence.
+| Historical invitation without current state is `sent_status_unknown`, not necessarily pending.
+| `connected_on`, `acceptance_evidence`, `accepted_at`
+| Connection date; acceptance classification; exact acceptance time only if explicitly supported.
+| Preserve date-only values; never fabricate midnight or substitute import time.
+| `last_linkedin_message_at`, `last_linkedin_message_direction`, `recent_messages`
+| Most recent eligible direct conversation activity; up to five most recent messages in chronological display order, each with time, direction, and up to 500 characters of text.
+| Unsupported attachments use a placeholder; missing content is not an empty conversation.
+| `apollo_fetched_at`, `gmail_fetched_at`, `linkedin_fetched_at`, `linkedin_data_as_of`, `warnings`
+| Retrieval, provider data time where known, and explicit source limitations.
+| Unknown source-generation time remains unknown even after a successful refresh.
+|===
+
+CSV columns are stable snake_case English. HTML uses readable English labels,
+escaped text, a clear coverage summary, and the same data. The CSV contains the
+JSON arrays above, correctly CSV-quoted; no delimiter-based sequence guessing.
+Export is intentionally private; message previews can be omitted by an explicit
+`--omit-message-text` option. This option does not alter stored timestamps.
+
+== Behavioral requirements
+
+=== S01 — List boundaries and contact data
+
+List selection uses ID. All pages must be read or coverage must be partial. A
+completed refresh reconciles list membership without erasing previously stored
+history. Failed or partial refreshes never remove missing contacts. Switching
+lists changes the view, not contact identity. An empty complete list is valid.
+
+Acceptance: a two-page list yields all unique contact IDs; a page-two failure
+keeps the last complete list and reports the failed attempt. A duplicate ID
+appearing on two pages does not create a duplicate row.
+
+=== S02 — Latest email across Apollo and Gmail
+
+Only messages sent by the configured owner identities to a verified contact
+address count. Include direct Gmail mail and Apollo sequence mail. Exclude
+incoming replies, drafts, scheduled messages, and failed attempts with no
+evidence of sending. A sent message that later bounced can still count as sent
+if a genuine sent timestamp is present; its delivery outcome remains separate.
+
+Use a verified Apollo sent field when available. If the API exposes only a
+delivery/completion time, preserve it as `delivered_at`; an exact Apollo send
+time remains unavailable. Gmail uses its documented `internalDate`, labeled
+`gmail_internal_date`. For migrated messages flag the precision limitation when
+known. Avoid promising SMTP-level time precision from either source.
+
+Combine the maximum known qualifying timestamp. The UI label is “Last email
+sent (latest known)”; the evidence field reveals the timestamp kind. “No sent
+email found” requires complete searches of both configured sources within their
+declared scope. Deleted Gmail messages and inaccessible Apollo history cannot
+be reconstructed; completeness never means all mail that ever existed.
+
+Acceptance: Apollo at 10:00 and direct Gmail at 11:00 yields Gmail 11:00; an
+incoming reply at 12:00 does not replace it. A Gmail auth failure keeps 11:00 as
+previous evidence and marks the source stale. An Apollo delivery-only record
+does not silently become a precise send timestamp.
+
+=== S03 — Sequences
+
+The field means current membership plus provider enrollment status, not every
+sequence in which the contact ever appeared. Resolve by sequence ID. Deleted or
+unreadable sequence names may display the ID with a warning. Only use the
+activity feed as supporting history; incomplete history cannot establish all
+current memberships. Complete current-membership proof is a release gate.
+
+Acceptance: two same-named sequences remain two entries; a removed enrollment
+does not appear as current; an unproven membership response displays unknown
+rather than `[]`.
+
+=== S04 — Identity resolution
+
+Resolution order: previously confirmed manual mapping; unique exact canonical
+LinkedIn public URL; unique exact known email. If these identifiers contradict
+each other, stop automatic resolution and request review. Company and name may
+be displayed as hints, never used as automatic proof. Normalize only known URL
+forms; do not turn Sales Navigator IDs or opaque URNs into guessed public URLs.
+
+For email, trim whitespace and normalize the domain. Do not strip plus tags or
+dots, invent aliases, or merge local parts by heuristics. A syntactically valid
+but unsupported email search form can be reported as unsearchable, not silently
+rewritten. Manual mapping records stable IDs and persists across refreshes.
+
+Acceptance: two Alex Smiths at one company remain unresolved without a stronger
+identifier; an exact URL/email conflict remains unresolved; a saved explicit
+mapping survives reimport and is invalidated visibly if its source record vanishes.
+
+=== S05 — Invitations, connections, and acceptance
+
+Store each invitation's direction and occurrence time. Reinviting a person
+does not erase earlier evidence. Connection dates prove a relationship existed
+on that date, not who initiated it.
+
+`acceptance_evidence` is `explicit`, `inferred_from_outgoing_and_connection`, or
+`unknown`. Inference needs a uniquely matched outgoing invitation that precedes
+the connection with compatible precision and no contradictory incoming evidence.
+Same-day date-only evidence is insufficient to order events. `accepted_at` is
+populated only by an explicit supported acceptance event. Inferred acceptance
+shows `connected_on` and the inference label, never an exact acceptance instant.
+Disappearing pending requests can be withdrawn or rejected; absence is not proof.
+
+Acceptance: an incoming invitation and new connection are not labeled “accepted
+my request”; an outgoing invitation followed by a later connection can be shown
+as inferred; a missing pending invitation alone causes no acceptance transition.
+
+=== S06 — Messages and recent activity
+
+Retain the most recent five direct messages per matched contact, including
+both directions, with a stable tie-break by provider message identity. Direction
+comes from the configured owner identity, not text. An invitation note is not a
+separate chat message unless the provider identifies it as one. Group messages
+are excluded from contact summaries and counted in coverage warnings. Do not
+duplicate the same group message onto every participant.
+
+The default recent-activity window is 30 calendar days, configurable with
+`--since YYYY-MM-DD` in the configured display timezone. The summary table still
+retains the most recent known interaction even if it is older. The activity
+table includes unmatched invitations/connections and their matching status;
+unmatched message content is not persisted by default.
+
+Acceptance: sorting out-of-order events produces the correct five previews;
+message text containing HTML or spreadsheet formulas cannot execute; unknown
+Sales Navigator coverage is displayed separately from verified standard inbox
+coverage.
+
+=== S07 — Dates, freshness, and idempotency
+
+Store UTC for timezone-aware instants and preserve the original representation.
+Date-only values stay dates. A naive time requires an explicitly confirmed
+source timezone; ambiguous DST times remain unresolved. Display defaults to
+`Europe/Paris`, a preference rather than proof of the source timezone.
+
+Keep event time, observation time, provider snapshot time, and import time
+distinct. Older imports cannot regress a newer projection. Reimporting identical
+data is a no-op for events. Missing categories and incomplete snapshots never
+delete existing facts. A changelog gap is a visible coverage gap even if a
+snapshot recovers current connections.
+
+Acceptance: importing the same data twice leaves row and event counts stable;
+importing an older archive does not move the last-message time backward; a
+date-only connection remains date-only through SQLite and CSV export.
+
+=== S08 — On-demand refresh and failure handling
+
+One explicit command refreshes configured sources and produces a run summary.
+Each source/domain is committed atomically after validated complete retrieval.
+Failure in one source does not discard successful independent sources, but the
+overall run is partial. Preserve the last good values and their original
+freshness. Never silently switch to archives or another data provider.
+
+Exit codes: `0` all requested capabilities completed; `1` operational failure
+with no useful refresh; `2` invalid input/configuration; `3` useful but partial
+refresh. A failed source with cached data is still partial. CLI help and offline
+export do not require credentials. Request budgets, timeout, retry exhaustion,
+and malformed responses produce actionable errors without private payloads.
+
+=== S09 — Privacy and data handling
+
+Provider writes are outside scope. API calls allow only the read/search routes
+documented in the access checklist, including read-only searches that use POST.
+Store only selected-list contacts, necessary matching/event metadata, recent
+matched message previews, and minimal recent unmatched network activity. Do not
+store full mailbox bodies, attachments, or unrelated profile snapshots.
+
+Private directory permissions are owner-only where supported. Tokens never go
+to stdout, Git, HTML, CSV, test fixtures, or run reports. Provide a command to
+forget a contact's cached events and mappings; explicitly explain that later
+source refresh can reimport it. Provide a reset of the entire local store with
+an explicit confirmation flag. Revocation happens in each provider's UI; reset
+must not claim to revoke provider access or securely erase backups.
+
+=== S10 — Usability and deployment
+
+A developer can install and run the tool locally with documented commands.
+CSV opens in common spreadsheet software; HTML opens without a server, CDN,
+analytics, or external assets. Do not fetch company websites or message links.
+Render URLs as validated http/https links only. Text fields that could be
+spreadsheet formulas are neutralized at CSV export; internal values are intact.
+
+== Non-goals
+
+No sending mail, invitations, or messages; no Apollo write-back; no automated
+sequence changes; no enrichment spending; no scraped profiles; no shared hosted
+app; no background scheduler; no multiple-mailbox or team permissions; no AI
+summarization; no guarantee that inaccessible or deleted history can be recovered.
+
+== Completion criteria
+
+The first release must pass every S01–S10 acceptance case offline and a private
+live check using one owner-selected list, a known direct Gmail email, a known
+Apollo sequence email, known current enrollment, invitation, connection, and
+messages. Record unavailable historical or Sales Navigator data explicitly.
+
+Measure: no false auto-joins in the synthetic collision cases; complete selected
+list retrieval or visible partial status; stable counts after rerun; no tokens
+or personal fixtures tracked; all required provider capabilities verified or
+reported as incomplete. Measure workflow usefulness with the owner on the first
+real list; do not invent a productivity percentage or latency SLA.
+
+An offline-tested build with pending credentials is an implementation milestone,
+not a fully verified synchronization product. An archive-only demonstration is
+not evidence that live on-demand freshness works.

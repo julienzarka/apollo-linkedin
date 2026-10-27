@@ -1,0 +1,100 @@
+= Execution Handoff
+:toc:
+
+The repository currently contains planning and documentation only. It is ready
+for a lower-cost coding model to execute bounded tasks. Real API access is not
+verified; account consent is an owner action. Start by reading the remaining
+work, not by assuming T00 is complete.
+
+== Prompt for the execution agent
+
+[source,text]
+----
+Work on Apollo LinkedIn in this repository. Read AGENTS.adoc and TASKS.md.
+Read docs/SPEC.adoc and the first unblocked task card in docs/EXECUTION_PLAN.md.
+
+Implement that task only, using failing behavioral tests before production code.
+Use the simplest design described in docs/ARCHITECTURE.adoc. Read the relevant
+provider evidence in docs/RESEARCH.adoc and docs/ACCESS.adoc before adapter work.
+
+The owner requires both Apollo and direct Gmail sent-email coverage. LinkedIn
+regional eligibility is confirmed, but API grants, field shapes, sequence
+membership completeness, snapshot freshness, and Sales Navigator message
+coverage still need proof. Do not replace an unverified API with a scraper.
+
+Preserve current edits. Create a feature branch for implementation. Inspect
+git status, git diff, and codemap --diff --ref master. Use Serena if available;
+if unavailable, report that and use focused reads. Do not use sub-agents unless
+the owner asks. Never read personal browser profiles or the macOS keychain.
+
+Run the task's failing test, implement the minimum, then targeted/full offline
+tests, Ruff, and build. Never use real credentials or contact data in tests/CI.
+Keep secrets, real samples, private evidence, and exports under ignored private/.
+
+Remove a TASKS.md item only after its delivery AND required verification.
+If live verification is blocked, keep that remaining work and name the exact
+missing owner setup. Continue independent tasks when the owner has authorized
+multiple tasks. Report using the format below and identify the next task.
+Do not merge the implementation PR or claim live success without evidence.
+----
+
+For a single-task run, append `Execute T02 only` (replace the ID as appropriate).
+For sequential execution, append `Continue through all unblocked tasks; keep
+blocked evidence gates visible`. Avoid asking the model to redesign the project
+unless a concrete provider probe contradicts the specification.
+
+== Per-task report
+
+[source,text]
+----
+Task: Txx — short title
+Outcome: implemented / offline verified / live verified / blocked
+
+Behavior changed:
+- What the user can now do and which SPEC requirement it satisfies.
+
+Evidence:
+- RED: exact command, expected failure, observed result.
+- GREEN: exact command and real pass/fail count.
+- Checks: full suite, Ruff, format, package build, diff check.
+- Live checks: exact capabilities verified, or NOT RUN with reason.
+
+Files: paths that changed; one-line purpose for each group.
+Limitations: unknown fields, partial coverage, access gaps, unresolved decisions.
+TASKS.md: line removed only if verified; otherwise remaining item and blocker.
+Next: next unblocked task ID and the smallest next action.
+Publication: local only / pushed branch / PR URL. Never imply a merge.
+----
+
+Do not paste raw HTTP payloads, tokens, customer names, private emails, profile
+URLs, or message content into a public report. Use synthetic IDs, counts, status
+codes, field paths, and sanitized test evidence.
+
+== Decisions already made
+
+* Public GitHub repository `julienzarka/apollo-linkedin`; MIT; English throughout.
+* KISS, DRY, SOLID, YAGNI, and TDD for behavior.
+* The HumanVS remaining-only task model; verified work is removed, not checked
+  off into a growing completed-history section.
+* Both Apollo and direct Gmail sent-email evidence are required.
+* One owner, one Gmail mailbox with aliases, one Apollo workspace, one LinkedIn
+  member account; local table is the first synchronization destination.
+* LinkedIn Member Portability is the primary route; archives are an explicit
+  fallback. Website scraping and provider writes are outside the selected design.
+* Plain Python, SQLite, local HTML/CSV; no hosted app or frontend framework.
+* No elapsed-time delivery estimates or invented API coverage.
+
+== Known unresolved facts
+
+See the decision table in `ACCESS.adoc`. Do not copy its statuses here; it is
+the single account-capability record, with private measured evidence maintained
+outside Git. The user's EU/EEA/Swiss confirmation establishes regional
+eligibility, not an issued token, working permission, or fresh snapshot.
+
+== Bootstrap verification versus application verification
+
+During bootstrap, validate document rendering, local links, task dependencies,
+MIT text, Git exclusions, and GitHub repository properties. There are no runtime
+tests or connectors yet. During implementation, the task cards define the
+behavioral checks. Never convert a documentation check into an application
+success claim.

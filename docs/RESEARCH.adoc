@@ -1,0 +1,342 @@
+= State of the art and feasibility
+:toc:
+
+Research date: *2026-10-27*. Public documentation was inspected; no
+private Apollo, Gmail, or LinkedIn data was accessed. “Documented” does
+not mean “tested with the owner's account.” Recheck access and schemas
+before implementation.
+
+== Recommendation
+
+Build a small, local, read-only consolidation tool. Read an Apollo saved
+contact list, read the owner's sent Gmail metadata, and read the owner's
+LinkedIn data through *Member Data Portability (Member)*. Generate a
+private table on demand. Support user-downloaded LinkedIn CSVs when the
+API is unavailable or incomplete.
+
+The owner confirmed both Apollo and direct Gmail email coverage are
+required, and that the LinkedIn account is located in the EU/EEA or
+Switzerland. Actual product access, freshness, and Sales Navigator inbox
+coverage remain untested.
+
+This is a workaround for a missing integration, using separate supported
+data access paths. It does not require an Apollo overlay inside
+LinkedIn. It does not promise immediate LinkedIn updates or full
+bidirectional CRM synchronization.
+
+== Findings and evidence
+
+[[r1--sales-navigator-is-not-the-only-linkedin-api]]
+=== R1 — Sales Navigator is not the only LinkedIn API
+
+The Sales Navigator documentation still says new API partners are not
+being accepted. A Sales Navigator subscription is therefore not a
+sufficient access plan. This restriction does not establish that every
+LinkedIn API is closed.
+https://learn.microsoft.com/en-us/linkedin/sales/[Source: Sales
+Navigator platform].
+
+Member Data Portability (Member) has a separate self-service onboarding
+path for eligible EEA/Swiss members. It documents using the designated
+default Company Page, requesting the Member product, and generating an
+OAuth token for the owner's own data. Each person running this public
+project supplies their own application and credentials; distributing
+source code is not third-party API approval.
+https://learn.microsoft.com/en-us/linkedin/dma/member-data-portability/member-data-portability-member[Source:
+Member onboarding].
+
+[[r2--the-relevant-linkedin-domains-exist-with-unresolved-operational-details]]
+=== R2 — The relevant LinkedIn domains exist, with unresolved operational details
+
+The snapshot domain list names `INVITATIONS`, `CONNECTIONS`, and
+`INBOX`. These are the first capability probes. `CONTACTS` means
+imported address-book contacts, not the member's connection graph.
+https://learn.microsoft.com/en-us/linkedin/dma/member-data-portability/shared/snapshot-domain[Source:
+snapshot domains].
+
+The snapshot endpoint is
+`GET /rest/memberSnapshotData?q=criteria&domain=...`. Its documentation
+explicitly requires `Linkedin-Version: 202312`; the page's 2026 product
+version is not the request header. Pagination totals can be incomplete;
+the documentation describes continuing until its specific no-data
+response. Probe the exact response and paging behavior before coding a
+stopping rule. An arbitrary error must never be treated as end-of-data.
+https://learn.microsoft.com/en-us/linkedin/dma/member-data-portability/shared/member-snapshot-api[Source:
+snapshot API].
+
+The changelog endpoint,
+`GET /rest/memberChangeLogs?q=memberAndApplication`, provides
+post-consent events with a 28-day retrieval window. Its inclusive
+`startTime` is based on `processedAt`; use stable event identity for
+replay deduplication. Its example includes a Sales Navigator message,
+which is evidence to test, not proof of complete inbox coverage. The
+onboarding guide names `r++_++dma++_++portability++_++self++_++serve`,
+while shared endpoint permission tables use different scope names.
+Record what the actual token grants and what calls work.
+https://learn.microsoft.com/en-us/linkedin/dma/member-data-portability/shared/member-changelog-api[Source:
+changelog API].
+
+Freshness is a measurement gate: retrieval time is not snapshot
+generation time. The inspected snapshot guide does not provide an
+application-level freshness guarantee. Do not claim live synchronization
+from a successful HTTP response.
+
+[[r3--official-downloads-provide-a-fallback-not-instant-refresh]]
+=== R3 — Official downloads provide a fallback, not instant refresh
+
+LinkedIn documents archives containing sent/received invitations,
+first-degree connections with connection dates, and sent/received
+messages. Some connection emails are unavailable because of the
+connection's privacy choices. Generation is asynchronous; a newly
+requested archive is not an immediate website scrape. The actual CSV
+headers, timestamps, locale, and Sales Navigator message coverage must
+be checked on a user-provided export.
+https://www.linkedin.com/help/linkedin/answer/a1339364[Source: download
+your data].
+
+[[r4--apollo-is-forbidden-on-linkedin-needs-a-precise-interpretation]]
+=== R4 — “Apollo is forbidden on LinkedIn” needs a precise interpretation
+
+Apollo continues to document an extension for LinkedIn and Sales
+Navigator. That establishes a vendor offering, not LinkedIn approval.
+https://knowledge.apollo.io/hc/en-us/articles/4409226637453-Apollo-Chrome-Extension-Overview[Source:
+Apollo extension].
+
+LinkedIn prohibits third-party tools that scrape, overlay, or automate
+its website and describes account restriction risks. Reimplementing
+those actions in Playwright would retain the access problem. The
+selected design uses official APIs and user exports.
+https://www.linkedin.com/help/linkedin/answer/a1341387/prohibition-of-scraping-software[Source:
+prohibited tools].
+
+Portability has its own additional terms, including security obligations
+and the relationship to general API terms. API availability is not a
+blanket permission to redistribute other people's data. This project
+publishes code and synthetic fixtures; personal records remain local.
+https://www.linkedin.com/legal/l/portability-api-terms[Source:
+portability terms].
+
+[[r5--apollo-supports-saved-list-reads-google-login-is-separate]]
+=== R5 — Apollo supports saved-list reads; Google login is separate
+
+Apollo users authenticate API requests with `x-api-key`. Signing in to
+Apollo with Google does not grant this program Apollo API access or
+Gmail mailbox access. API keys act at workspace level; do not infer the
+prospecting sender from the key's acting user. Configure the owner's
+sender identity explicitly.
+https://docs.apollo.io/reference/authentication[Source: authentication].
+
+Start with a key scoped to the required read/search endpoints. Access
+depends on plan and endpoint permissions. Some pages' old error examples
+mention a master key while their current access tables list scoped keys:
+test a scoped key first; do not automatically request or escalate to a
+master key. https://docs.apollo.io/docs/create-api-key[Source: key
+creation].
+
+[cols=",,",options="header",]
+|===
+|Need |Documented request |Important boundary
+|Find saved lists |`GET /api/v1/labels` |Select a people list by stable
+ID; list names can collide.
+https://docs.apollo.io/reference/get-a-list-of-all-lists[Lists]
+
+|Read list members |`POST /api/v1/contacts/search`, body
+`contact++_++label++_++ids`, `page`, `per++_++page` |Saved contacts, not
+Apollo's prospect database; maximum documented search window is 50,000.
+https://docs.apollo.io/reference/search-for-contacts[Contact search]
+
+|Inspect one contact |`GET /api/v1/contacts/++{++contact++_++id}` |Prove
+name, title, email, LinkedIn URL, company/website, and membership fields
+from a real redacted shape.
+https://docs.apollo.io/reference/view-a-contact[Contact]
+
+|Resolve sequence names |`POST /api/v1/emailer++_++campaigns/search`
+with documented query parameters |A sequence catalog is not a
+contact-membership list.
+https://docs.apollo.io/reference/search-for-sequences[Sequences]
+
+|Read enrollment events
+|`POST /api/v1/emailer++_++campaigns/activity++_++feed`, body
+`contact++_++id` |Latest 50 events only; no page traversal. Never claim
+complete current membership from a truncated timeline.
+https://docs.apollo.io/reference/get-contact-sequence-activity[Activity]
+
+|Read outreach email activity |`GET /api/v1/emailer++_++messages/search`
+|Documents sequence emails. Validate recipient IDs and actual
+sent/delivery timestamps; drafts and scheduled emails do not count.
+https://docs.apollo.io/reference/search-for-outreach-emails[Outreach]
+|===
+
+The listed record-management reads are documented as zero-credit on
+current plans, but legacy plans differ. API eligibility and request
+quotas remain separate. Do not enrich missing addresses automatically.
+https://docs.apollo.io/docs/api-pricing[Source: credits].
+
+Rate limits are shared by the workspace, vary by endpoint and plan, and
+can apply across minute/hour/day windows. Use bounded serial requests,
+provider backoff, and a visible incomplete result when the request
+budget is exhausted.
+https://docs.apollo.io/reference/rate-limits[Source: rate limits].
+
+[[r6--direct-gmail-requires-its-own-consent-and-adapter]]
+=== R6 — Direct Gmail requires its own consent and adapter
+
+Use an installed-application OAuth flow with an established Google
+library, loopback callback, state protection, and PKCE. Never collect a
+Gmail password or reuse an Apollo login cookie.
+https://developers.google.com/identity/protocols/oauth2/native-app[Source:
+desktop OAuth].
+
+`gmail.readonly` supports mailbox search but is a restricted scope.
+Request read-only access and retrieve message metadata only.
+`gmail.metadata` does not support the `q` search parameter. Do not
+promise that a public hosted application can skip Google's verification
+requirements merely because its code is MIT.
+https://developers.google.com/workspace/gmail/api/auth/scopes[Sources:
+scopes],
+https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list[message
+listing].
+
+Gmail API search differs from the Gmail UI, notably in alias expansion.
+Match explicit known email addresses and verify parsed recipients after
+search.
+https://developers.google.com/workspace/gmail/api/guides/filtering[Source:
+filtering].
+
+Use message `internalDate` as a labeled Gmail timestamp, not a
+guaranteed SMTP delivery timestamp; imported mail can have different
+semantics. Preserve a validated Date header as evidence without letting
+it silently override the chosen timestamp rule.
+https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages[Source:
+message resource].
+
+External OAuth apps in Testing can issue refresh tokens with a seven-day
+life for these scopes; handle expiry and re-consent. Record the actual
+app mode.
+https://developers.google.com/identity/protocols/oauth2#expiration[Source:
+OAuth token expiration].
+
+== Alternatives considered
+
+[cols=",,",options="header",]
+|===
+|Option |Fit |Decision
+|Apollo extension {plus} spreadsheet |Existing contact workflow; does
+not establish all requested network-history reads or LinkedIn approval
+|Do not make the project depend on it. See R4.
+
+|Sales Navigator partner/CRM integration |Official route, but access and
+commercial prerequisites differ from owning a seat |Not the initial
+dependency. See R1.
+
+|Member Portability {plus} Apollo {plus} Gmail APIs |Covers documented
+data categories without controlling the website |Preferred, subject to
+capability tests.
+
+|Official exports {plus} local joins |Smallest offline fallback; avoids
+ongoing API access dependency |Implement as fallback, label archival
+freshness.
+
+|n8n |Useful orchestration; its built-in LinkedIn node documents
+posting, not the required inbox/network reads |Extra platform does not
+solve missing permissions.
+https://docs.n8n.io/integrations/builtin/app-nodes/n8n-nodes-base.linkedin/[Node
+docs]
+
+|Unipile |Vendor documents invitations, messages, and connection
+detection; detection can lag and uses polling |Technically relevant
+comparison, but adds a vendor/session dependency and does not establish
+official LinkedIn authorization.
+https://developer.unipile.com/docs/list-provider-features[Feature
+matrix],
+https://developer.unipile.com/docs/detecting-accepted-invitations[acceptance
+detection]
+
+|Custom browser scraper |Could read visible UI, but selectors, sessions,
+and provider restrictions become core dependencies |Rejected for the
+first design. See R4.
+|===
+
+No subscription prices or vendor safety guarantees are assumed. This is
+a capability comparison, not an exhaustive commercial procurement study.
+
+== Five Whys
+
+These are design hypotheses grounded in the brief and documentation, not
+a measured production incident. Validate them with the owner's first
+list.
+
+[cols=",,,",options="header",]
+|===
+|Why |Workflow: why is prospecting fragmented? |Access: why does
+scraping appear necessary? |Trust: why might a joined table be
+misleading?
+|1 |Contacting the next person needs several tools. |Sales Navigator API
+onboarding is closed. |A row can show the wrong person or date.
+
+|2 |Apollo holds leads/sequences; Gmail and LinkedIn hold other
+interactions. |The subscription is being treated as developer access.
+|Names collide and events have different meanings.
+
+|3 |There is no shared view of these records. |Sales Navigator is being
+treated as the only data route. |An accepted invitation is being
+inferred from a missing pending entry.
+
+|4 |Cross-source identity and freshness are not explicit. |Member
+portability and downloads were not evaluated in the brief. |Source
+absence, partial reads, and date precision are being collapsed.
+
+|5 |No small, repeatable reconciliation process exists yet. |Product
+access, authentication, and account entitlement are conflated. |The
+proposed table needs an evidence contract before connectors.
+|===
+
+Root actions: define stable identity, date semantics, completeness, and
+provenance; verify account capabilities; implement read-only adapters;
+reconcile into a local table. Do not start with browser automation or an
+extensible CRM.
+
+Alternative explanations checked: a total Apollo-specific ban was not
+established; Google's login does not authorize API reads; connection
+dates alone cannot establish invitation direction; the sequence activity
+feed cannot prove unlimited membership history; a recent fetch cannot
+prove fresh data.
+
+== Open evidence gates
+
+[cols=",,",options="header",]
+|===
+|Gate |Evidence needed |If unavailable
+|Apollo saved-list fields |Scoped key, list ID, field paths, pagination,
+company website, stable contact IDs |Import a user-exported Apollo CSV
+with explicit missing columns.
+
+|Complete current sequence membership |Verified current-membership
+response or export with statuses |Mark membership incomplete; do not
+substitute a 50-event reconstruction.
+
+|Apollo sender/email dates |Owner sender identifiers, recipients,
+sent-vs-delivered semantics |Keep source unknown; Gmail alone cannot
+prove Apollo sequence membership.
+
+|Gmail access |User consent, metadata shape, sender aliases, one known
+sent email |Mark required Gmail capability blocked; an Apollo-only run
+is partial.
+
+|LinkedIn API |Actual granted scope, all three domains, paging and
+no-data behavior |Use downloaded archives; preserve the unmet on-demand
+freshness requirement.
+
+|LinkedIn freshness/coverage |Known invitation, connection, standard
+message, and Sales Navigator message compared to source UI |Report
+unsupported/unverified categories; no full-sync claim.
+
+|Accurate acceptance |Explicit acceptance event or direction-aware
+evidence |Show a connection date and an explicitly inferred
+relationship.
+|===
+
+Complete link:ACCESS.adoc[the access checklist] before enabling
+real-provider connectors. Offline implementation may proceed against
+clearly synthetic fixtures while an owner-controlled consent step
+remains pending.

@@ -1,0 +1,158 @@
+= Account Access and Contract Verification
+:toc:
+
+Status: all live checks below are *not run*. Regional eligibility and both-email
+scope were confirmed by the owner. These checks require owner-controlled consent;
+their absence does not block pure-domain or synthetic-fixture development.
+Provider documentation and dated evidence are in link:RESEARCH.adoc[Research].
+
+== Private evidence format
+
+Create `private/capabilities.adoc` locally. For each capability record date,
+provider, endpoint, HTTP status, granted scope names, response field paths/types,
+pagination termination, rate-limit observations, timestamp meaning, completeness,
+and the conclusion `verified`, `partial`, `unsupported`, or `not_tested`.
+Record counts and synthetic record references, never token values or message
+content in the shareable report. Keep original private samples only as long as
+needed. Build independently invented fixtures with the same shape for tests.
+
+== A — Apollo
+
+. In Apollo settings, create an API key scoped to the endpoints below. Google
+  sign-in is not the key. Do not put it in a command argument or tracked file.
+  The planned application reads `APOLLO_API_KEY` from the environment.
+. Select a small existing saved people list and note its stable ID privately.
+  Do not create contacts or buy enrichment as a probe.
+. Call the auth health read, then list retrieval and one contact search page.
+  Confirm a saved people list is being filtered by `contact_label_ids`.
+. Verify contact ID, name, role, email, LinkedIn public URL, company name, and
+  website field paths. If the search lacks company details, check the documented
+  contact read and then account read only if needed. Record missing fields.
+. Verify list pagination with at least two pages by choosing a small page size.
+. Find a contact with two known sequence memberships. Inspect current membership
+  fields, resolve names through the sequence catalog, and compare to the UI.
+  Activity feed alone is insufficient if it cannot prove complete membership.
+  If no authoritative membership field/export is available, mark this required
+  capability incomplete and retain its task.
+. Read outreach emails. Verify recipient/contact ID, owner sender ID, actual
+  timestamp fields, and drafted/scheduled/failed/sent distinctions against one
+  known example. Define the allowed senders explicitly; API key acting-user
+  identity is not a reliable proxy for the owner.
+. Record scoped-key 403s separately from authentication failures. Check the
+  endpoint access table and key configuration before concluding a paid upgrade
+  is required. Never change plans or expand permissions automatically.
+
+[cols="1,2",options="header"]
+|===
+| Method | Request path (base `https://api.apollo.io`)
+| GET | `/api/v1/auth/health`
+| GET | `/api/v1/labels`
+| POST (search only) | `/api/v1/contacts/search`
+| GET | `/api/v1/contacts/{contact_id}`
+| POST (search only) | `/api/v1/emailer_campaigns/search`
+| POST (read activity) | `/api/v1/emailer_campaigns/activity_feed`
+| GET | `/api/v1/emailer_messages/search`
+|===
+
+For contacts, JSON body parameters carry the list filter. Sequence catalog
+search parameters are documented as query parameters despite POST. Preserve
+method and parameter location in contract fixtures. Do not invent an outreach
+`contact_ids` filter: the inspected page documents sender, sequence, date, and
+keyword filters; fetch the needed bounded scope and join by verified response IDs.
+
+== B — Gmail
+
+. Create or select a Google Cloud project, enable Gmail API, configure OAuth
+  consent, and create a Desktop application client. In Testing mode add the owner
+  as a test user. Use the official desktop flow described in Research R6.
+. Put downloaded client configuration in `private/google-client.json`. Authenticate
+  interactively with `gmail.readonly`; store the resulting refresh token in a
+  separate private file with owner-only permissions. Do not use a service account
+  for an ordinary personal Gmail mailbox.
+. List the exact mailbox address and legitimate sending aliases in private
+  configuration. A Gmail address used to sign into Apollo need not be the mailbox
+  connected to Apollo; confirm both identities.
+. Verify `GET /gmail/v1/users/me/messages` with `labelIds=SENT`, all pages, and
+  a recipient query for a known contact. Then read selected messages using
+  `GET /gmail/v1/users/me/messages/{id}?format=metadata` with selected headers
+  `From`, `To`, `Cc`, `Bcc`, `Date`, and `Message-ID`. Do not request bodies.
+. Compare one known direct sent email and one Apollo-sent email if it is present
+  in that mailbox. Verify epoch-millisecond `internalDate`, parsed recipients,
+  and sent labels. Include alias, CC/BCC, same-name, and unsent examples in fixtures.
+. Confirm token refresh and document revocation/re-consent behavior. Testing-mode
+  token expiry is a known setup consideration, not a connector retry bug.
+
+The read-only token has broader access than the fields this program needs.
+Minimize reads and storage in code. Each public-project user configures their
+own OAuth client. A future hosted or widely distributed OAuth app needs a separate
+Google policy/verification assessment; it is outside this local project's scope.
+
+== C — LinkedIn Member Portability
+
+. Use the owner account's developer portal. Follow the Member onboarding guide's
+  designated default Company Page; do not create a company page as a workaround.
+. Request *Member Data Portability (Member)*, not SNAP and not the third-party
+  portability program. The user reviews and accepts the provider's terms.
+. Generate a member token through the documented token tool. Record actual
+  granted scope names, expiry, and account identity privately. The onboarding
+  and shared endpoint pages disagree on scope naming; let a successful scoped
+  call resolve the discrepancy rather than requesting unrelated permissions.
+. With bearer authorization, probe `GET /rest/memberSnapshotData?q=criteria`
+  separately for `INVITATIONS`, `CONNECTIONS`, and `INBOX`, using the documented
+  version header. Record field shapes and no-data response for each domain.
+. Prove pagination using a small count. Record whether next links, advancing
+  page starts, or the documented no-data error signal completion. Store enough
+  metadata to distinguish domain-not-ready from a completed empty result.
+. Compare an existing outgoing invitation, incoming invitation, established
+  connection, direct message in each direction, and Sales Navigator/InMail item
+  where available. Do not send anything just to create a probe.
+. Record provider snapshot time if supplied. Revisit a known recent existing
+  event on a later read to measure visibility. A new retrieval timestamp does
+  not establish a changed snapshot. If freshness remains unknown, say so.
+. Probe `GET /rest/memberChangeLogs?q=memberAndApplication` only for the owner's
+  granted scope. Identify relevant resource/event shapes, identity, replay,
+  timestamps, and pagination. The presence of posts does not prove invitation
+  or inbox coverage. Enable changelog processing only once those needed events
+  and token permissions are verified.
+. Record how standard LinkedIn and Sales Navigator coverage differ. If an item
+  is missing, distinguish permission, processing delay, history limits, and
+  unsupported domain before choosing a fallback.
+
+The planned app reads `LINKEDIN_ACCESS_TOKEN` from the environment. It does not
+automatically refresh or regenerate LinkedIn tokens without a documented grant.
+Expired tokens require a clear owner reauthorization instruction.
+
+== D — Export fallback
+
+The user requests their own archive in LinkedIn Settings & Privacy and extracts
+the relevant CSV files into `private/linkedin-export/`. The importer accepts the
+extracted directory, not ZIP files, to avoid archive extraction complexity.
+Confirm actual headers and locale for connections, invitations, and messages.
+Do not hard-code guessed CSV schemas from internet examples.
+
+If Apollo API access is unavailable, the user can export their saved list and
+any needed current-enrollment data from Apollo. Preserve Apollo contact IDs
+where supplied. An export missing stable IDs cannot be silently treated as the
+same live list. Record unsupported source columns and their effects.
+
+Archive imports are explicit user actions, never automatic fallback after 401.
+Each import records the file digest, observed archive date where available, and
+import time. Missing files mean unavailable domains, not empty ones.
+
+== Decision record to produce
+
+[cols="1,1,2",options="header"]
+|===
+| Capability | Initial status | Required decision
+| Apollo list/contact fields | Not tested | Verified mapping or named missing fields.
+| Apollo sequence membership | Not tested | Authoritative complete mapping/export or a retained blocker.
+| Apollo sent-email evidence | Not tested | Sender scope and timestamp classification.
+| Gmail metadata | Not tested | Consent, mailbox/aliases, coverage, refresh behavior.
+| LinkedIn snapshots | Not tested | Per-domain support, freshness, pagination.
+| LinkedIn changelog | Not tested | Needed event coverage and replay identity, or defer with stated freshness limit.
+| Sales Navigator messages | Not tested | Verified examples or explicitly unsupported/unverified coverage.
+| Fallback CSV schemas | Not tested | Confirmed headers/date rules, or no claim of provider-format support.
+|===
+
+Once this record exists, amend only the affected mapping/task details. Do not
+redesign the entire application because one provider field is unavailable.
